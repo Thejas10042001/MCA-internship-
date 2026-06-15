@@ -27,7 +27,15 @@ import {
   Sliders, 
   ShieldCheck, 
   Eye, 
-  Star 
+  Star,
+  AlertTriangle,
+  Bell,
+  SlidersHorizontal,
+  Filter,
+  CheckCircle2,
+  X,
+  RotateCcw,
+  Info 
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -75,6 +83,146 @@ export function Dashboard({ data }: DashboardProps) {
   const [trendRegion, setTrendRegion] = useState<string>('All');
   const [trendCategory, setTrendCategory] = useState<string>('All');
   const [trendUnit, setTrendUnit] = useState<'monthly' | 'yearly'>('monthly');
+
+  // Dynamic parameters for the dynamic anomaly & outlier engine
+  const [salesThreshold, setSalesThreshold] = useState<number>(750);
+  const [lossThreshold, setLossThreshold] = useState<number>(-40);
+  const [quantityThreshold, setQuantityThreshold] = useState<number>(6);
+  const [selectedSeverity, setSelectedSeverity] = useState<string>('All');
+  const [dismissedAnomalyIds, setDismissedAnomalyIds] = useState<Set<string>>(new Set());
+  const [isAlertsHubOpen, setIsAlertsHubOpen] = useState<boolean>(true);
+  const [alertFilterQuery, setAlertFilterQuery] = useState<string>('');
+
+  // Outliers/Anomalies calculation block
+  const anomalies = useMemo(() => {
+    const list: any[] = [];
+    data.forEach((d) => {
+      const dId = `${d.orderId}-${d.productId}`;
+      if (dismissedAnomalyIds.has(dId)) return;
+
+      // 1. Extreme Pricing Outlier
+      if (d.sales > salesThreshold) {
+        list.push({
+          id: dId,
+          orderId: d.orderId,
+          productName: d.productName,
+          orderDate: d.orderDate,
+          customerName: d.customerName,
+          category: d.category,
+          region: d.region,
+          sales: d.sales,
+          profit: d.profit,
+          discount: d.discount,
+          quantity: d.quantity,
+          type: 'extreme_pricing',
+          typeName: 'Extreme Pricing Outlier',
+          severity: d.sales > salesThreshold * 1.5 ? 'critical' : 'high',
+          badgeColor: d.sales > salesThreshold * 1.5 ? 'red' : 'amber',
+          message: `Revenue spike: Transacted value of ${formatCurrency(d.sales)} deviates significantly from safe limits.`
+        });
+        return; // limit each transaction to its primary anomaly
+      }
+
+      // 2. Severe Margin Deficit (Neg profit on high sales)
+      if (d.profit < lossThreshold) {
+        list.push({
+          id: dId,
+          orderId: d.orderId,
+          productName: d.productName,
+          orderDate: d.orderDate,
+          customerName: d.customerName,
+          category: d.category,
+          region: d.region,
+          sales: d.sales,
+          profit: d.profit,
+          discount: d.discount,
+          quantity: d.quantity,
+          type: 'profit_deficit',
+          typeName: 'Severe Margin Deficit',
+          severity: d.profit < lossThreshold * 2.5 ? 'critical' : 'high',
+          badgeColor: d.profit < lossThreshold * 2.5 ? 'red' : 'amber',
+          message: `Extreme return leak: Net marginal loss of ${formatCurrency(d.profit)} incurred across ${d.quantity} units.`
+        });
+        return;
+      }
+
+      // 3. Bulk Volume Spike (High quantity)
+      if (d.quantity > quantityThreshold) {
+        list.push({
+          id: dId,
+          orderId: d.orderId,
+          productName: d.productName,
+          orderDate: d.orderDate,
+          customerName: d.customerName,
+          category: d.category,
+          region: d.region,
+          sales: d.sales,
+          profit: d.profit,
+          discount: d.discount,
+          quantity: d.quantity,
+          type: 'volume_spike',
+          typeName: 'Bulk Volume Spike',
+          severity: 'warning',
+          badgeColor: 'yellow',
+          message: `System flagged standard index exceed: batch distribution of ${d.quantity} units represents supply-chain outlier.`
+        });
+        return;
+      }
+
+      // 4. Subsidized Pricing Outlier (High discount causing net loss)
+      if (d.discount > 0.15 && d.profit < 0) {
+        list.push({
+          id: dId,
+          orderId: d.orderId,
+          productName: d.productName,
+          orderDate: d.orderDate,
+          customerName: d.customerName,
+          category: d.category,
+          region: d.region,
+          sales: d.sales,
+          profit: d.profit,
+          discount: d.discount,
+          quantity: d.quantity,
+          type: 'discount_abuse',
+          typeName: 'Subsidized Pricing Outlier',
+          severity: 'warning',
+          badgeColor: 'yellow',
+          message: `Excessive subsidy: Discount profile of ${formatPercent(d.discount * 100)} applied resulting in structural loss of ${formatCurrency(d.profit)}.`
+        });
+      }
+    });
+
+    return list;
+  }, [data, salesThreshold, lossThreshold, quantityThreshold, dismissedAnomalyIds]);
+
+  const anomalyStats = useMemo(() => {
+    const totalCount = anomalies.length;
+    const criticalCount = anomalies.filter(a => a.severity === 'critical').length;
+    const highCount = anomalies.filter(a => a.severity === 'high').length;
+    const warningCount = anomalies.filter(a => a.severity === 'warning').length;
+    const revenueAtRisk = anomalies.reduce((sum, a) => sum + (a.sales || 0), 0);
+    const lossLeakage = anomalies.reduce((sum, a) => sum + (a.profit < 0 ? Math.abs(a.profit) : 0), 0);
+
+    return {
+      totalCount,
+      criticalCount,
+      highCount,
+      warningCount,
+      revenueAtRisk,
+      lossLeakage
+    };
+  }, [anomalies]);
+
+  const filteredAnomalies = useMemo(() => {
+    return anomalies.filter(a => {
+      const matchesSeverity = selectedSeverity === 'All' || a.severity === selectedSeverity.toLowerCase();
+      const matchesSearch = alertFilterQuery === '' || 
+        a.customerName.toLowerCase().includes(alertFilterQuery.toLowerCase()) ||
+        a.category.toLowerCase().includes(alertFilterQuery.toLowerCase()) ||
+        a.productName.toLowerCase().includes(alertFilterQuery.toLowerCase());
+      return matchesSeverity && matchesSearch;
+    });
+  }, [anomalies, selectedSeverity, alertFilterQuery]);
 
   // Extract regions and categories dynamically
   const regions = useMemo(() => ['All', ...Array.from(new Set(data.map(d => d.region)))], [data]);
@@ -243,6 +391,278 @@ export function Dashboard({ data }: DashboardProps) {
         <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono tracking-wider uppercase ml-auto">
           <span>Inference Platform: {isSyncing ? "Recalculating..." : "Synchronized"}</span>
         </div>
+      </div>
+
+      {/* Transaction Anomaly & Outliers Hub */}
+      <div id="anomaly-guard-hub" className="glass-card overflow-hidden border border-red-500/10 shadow-[0_0_15px_rgba(239,68,68,0.03)] rounded-2xl">
+        {/* Hub Header */}
+        <div className="px-6 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/5 bg-slate-900/40">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              {anomalyStats.totalCount > 0 && (
+                <>
+                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping"></div>
+                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"></div>
+                </>
+              )}
+              <div className="w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
+                <Bell size={18} className="animate-pulse" />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">Continuous Transaction Anomaly Guard</h3>
+                {anomalyStats.totalCount > 0 && (
+                  <span className="px-2 py-0.5 text-[10px] font-mono tracking-tight bg-red-500/15 border border-red-500/20 text-red-400 rounded-full font-bold">
+                    {anomalyStats.totalCount} Flagged
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">Statistical out-of-bounds scanning and real-time risk mitigations</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end">
+            <button
+              onClick={() => setIsAlertsHubOpen(!isAlertsHubOpen)}
+              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition-all flex items-center gap-1.5"
+            >
+              <SlidersHorizontal size={12} className="text-blue-400" />
+              {isAlertsHubOpen ? "Hide Guard Hub" : "Show Guard Hub"}
+            </button>
+            {dismissedAnomalyIds.size > 0 && (
+              <button
+                onClick={() => setDismissedAnomalyIds(new Set())}
+                className="p-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-slate-400 hover:text-white transition-all"
+                title="Reset Dismissed Alerts"
+              >
+                <RotateCcw size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isAlertsHubOpen && (
+          <div className="p-6 space-y-6">
+            {/* KPI Banner within Anomaly Hub */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="p-3.5 rounded-xl bg-red-500/5 border border-red-500/10">
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">Critical Diagnostics</p>
+                <div className="flex items-end gap-2 mt-1">
+                  <h4 className="text-xl font-bold text-red-400 font-sans">{anomalyStats.criticalCount}</h4>
+                  <span className="text-[9px] text-slate-400 font-mono mb-1">Row limits</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-500/5 border border-amber-500/10">
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">High Priority Flags</p>
+                <div className="flex items-end gap-2 mt-1">
+                  <h4 className="text-xl font-bold text-amber-400 font-sans">{anomalyStats.highCount}</h4>
+                  <span className="text-[9px] text-slate-400 font-mono mb-1">Variance risk</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-yellow-500/5 border border-yellow-500/10">
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">Soft Warn Warnings</p>
+                <div className="flex items-end gap-2 mt-1">
+                  <h4 className="text-xl font-bold text-yellow-400 font-sans">{anomalyStats.warningCount}</h4>
+                  <span className="text-[9px] text-slate-400 font-mono mb-1">Subsidies</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-blue-500/5 border border-blue-500/10">
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">Cost Exposure Leakage</p>
+                <div className="flex items-end gap-2 mt-1">
+                  <h4 className="text-xl font-bold text-blue-400 font-mono">{formatCurrency(anomalyStats.lossLeakage)}</h4>
+                  <span className="text-[9px] text-slate-400 font-sans mb-1">Calculated</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Threshold Controls */}
+              <div className="space-y-4 p-5 rounded-xl bg-slate-900/55 border border-white/5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                    <SlidersHorizontal size={13} className="text-blue-400" />
+                    Detection Controls
+                  </h4>
+                  <span className="text-[9px] text-slate-500 font-mono">Real-time weights</span>
+                </div>
+
+                <div className="space-y-4 pt-2">
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Extreme Sales Price Outlier</span>
+                      <span className="text-blue-400 font-mono font-bold">{formatCurrency(salesThreshold)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={100}
+                      max={2000}
+                      step={50}
+                      value={salesThreshold}
+                      onChange={(e) => setSalesThreshold(Number(e.target.value))}
+                      className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+                    <p className="text-[9px] text-slate-500 leading-normal">
+                      Flags single invoices that cross the chosen value. Default is $750.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Maximum Acceptable Loss Deficit</span>
+                      <span className="text-red-400 font-mono font-bold">-{formatCurrency(Math.abs(lossThreshold))}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={-300}
+                      max={0}
+                      step={10}
+                      value={lossThreshold}
+                      onChange={(e) => setLossThreshold(Number(e.target.value))}
+                      className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-red-500"
+                    />
+                    <p className="text-[9px] text-slate-500 leading-normal">
+                      Flags orders operating under deep negative profit margins. Default is -$40.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Extreme Item Quantity Outlier</span>
+                      <span className="text-yellow-400 font-mono font-bold">{quantityThreshold} units</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={2}
+                      max={12}
+                      step={1}
+                      value={quantityThreshold}
+                      onChange={(e) => setQuantityThreshold(Number(e.target.value))}
+                      className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-yellow-500"
+                    />
+                    <p className="text-[9px] text-slate-500 leading-normal">
+                      Flags transaction baskets with excess volumes. Default is 6.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-white/5 flex items-center gap-1.5 text-[10px] text-slate-500">
+                  <Info size={11} className="text-slate-400 shrink-0" />
+                  <span>Interactive sliders instantly re-index standard parameters.</span>
+                </div>
+              </div>
+
+              {/* Alerts List Stage */}
+              <div className="lg:col-span-2 flex flex-col space-y-3">
+                {/* Search / Filters for alerts */}
+                <div className="flex flex-col sm:flex-row gap-2 items-center justify-between">
+                  <div className="flex items-center gap-1.5 bg-white/5 border border-white/5 rounded-lg px-2.5 py-1 w-full sm:w-auto">
+                    <Filter size={11} className="text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Filter by customer, category..."
+                      value={alertFilterQuery}
+                      onChange={(e) => setAlertFilterQuery(e.target.value)}
+                      className="bg-transparent border-none text-[11px] focus:outline-none text-white placeholder-slate-500 w-full sm:w-48"
+                    />
+                    {alertFilterQuery && (
+                      <button onClick={() => setAlertFilterQuery('')} className="text-slate-500 hover:text-white">
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex gap-1 items-center self-stretch sm:self-auto justify-end">
+                    <span className="text-[10px] text-slate-500">Severity:</span>
+                    {['All', 'Critical', 'High', 'Warning'].map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => setSelectedSeverity(cat)}
+                        className={cn(
+                          "px-2 py-0.5 rounded text-[9px] font-semibold border transition-all",
+                          selectedSeverity === cat 
+                            ? "bg-white/10 border-white/20 text-white" 
+                            : "bg-transparent border-transparent text-slate-400 hover:bg-white/5"
+                        )}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Alerts Records Container */}
+                <div className="flex-1 max-h-[290px] overflow-y-auto pr-1 space-y-2.5 custom-scrollbar">
+                  {filteredAnomalies.length > 0 ? (
+                    filteredAnomalies.map((a) => (
+                      <div 
+                        key={a.id}
+                        className={cn(
+                          "p-3 rounded-xl border flex flex-col sm:flex-row justify-between items-start gap-3 transition-colors",
+                          a.severity === 'critical' ? "bg-red-500/[0.02] border-red-500/10 hover:bg-red-500/[0.04]" :
+                          a.severity === 'high' ? "bg-amber-500/[0.02] border-amber-500/10 hover:bg-amber-500/[0.04]" :
+                          "bg-yellow-500/[0.01] border-yellow-500/10 hover:bg-yellow-500/[0.03]"
+                        )}
+                      >
+                        <div className="space-y-1 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={cn(
+                              "text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded",
+                              a.severity === 'critical' ? "bg-red-500/15 text-red-400" :
+                              a.severity === 'high' ? "bg-amber-500/15 text-amber-400" :
+                              "bg-yellow-500/15 text-yellow-400"
+                            )}>
+                              {a.severity}
+                            </span>
+                            <span className="text-slate-500 font-mono text-[9px]">ID: {a.orderId}</span>
+                            <span className="text-slate-500 font-mono text-[9px]">• {a.orderDate}</span>
+                          </div>
+
+                          <h5 className="text-[11px] font-bold text-white leading-normal mt-1">
+                            {a.customerName} <span className="font-normal text-slate-400">({a.category} • {a.region})</span>
+                          </h5>
+                          <p className="text-[10px] text-slate-400 leading-relaxed">{a.message}</p>
+                          
+                          <div className="flex gap-3 text-[9px] text-slate-500 font-mono mt-0.5">
+                            <span>Sales: <span className="text-slate-300 font-bold">{formatCurrency(a.sales)}</span></span>
+                            <span>Profit: <span className={cn("font-bold", a.profit < 0 ? "text-red-400" : "text-emerald-400")}>{formatCurrency(a.profit)}</span></span>
+                            <span>Qty: <span className="text-slate-300 font-bold">{a.quantity}</span></span>
+                            {a.discount > 0 && <span>Disc: <span className="text-slate-300 font-bold">{formatPercent(a.discount * 100)}</span></span>}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex sm:flex-col items-end gap-2 w-full sm:w-auto">
+                          <button
+                            onClick={() => {
+                              const nextSet = new Set(dismissedAnomalyIds);
+                              nextSet.add(a.id);
+                              setDismissedAnomalyIds(nextSet);
+                            }}
+                            className="px-2 py-1 border border-white/10 hover:border-white/20 bg-white/5 hover:bg-white/10 rounded text-[9px] font-medium text-slate-400 hover:text-white transition-all flex items-center gap-1 w-full sm:w-auto justify-center"
+                          >
+                            <CheckCircle2 size={10} className="text-emerald-400" />
+                            Acknowledge
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-12 text-center border border-dashed border-white/5 rounded-xl bg-slate-900/10">
+                      <CheckCircle2 className="text-emerald-400 mb-2" size={24} />
+                      <p className="text-xs text-slate-300 font-semibold">Clean Billing Cycle: No Anomalies Found</p>
+                      <p className="text-[10px] text-slate-500 mt-1 max-w-xs">
+                        All transaction data is currently operating within correct safety parameters, or all active records have been dismissed.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* KPI Cards Grid */}
