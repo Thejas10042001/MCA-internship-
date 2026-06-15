@@ -1,0 +1,6 @@
+{
+  "name": "NeuroForecast AI",
+  "description": "Enterprise-grade AI-powered Retail Sales Forecasting and Business Intelligence Platform using Explainable AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
